@@ -157,7 +157,14 @@ async function reef(path, body) {
 function num(v) {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (v == null) return null;
-  const s = String(v).replace(/TL/gi, "").replace(/\s/g, "");
+  if (typeof v === "object") {
+    for (const key of ["value", "amount", "price", "current", "sale", "discounted", "final", "basket_price", "campaign_price"]) {
+      const n = num(v[key]);
+      if (n != null && n > 0) return n;
+    }
+    return null;
+  }
+  const s = String(v).replace(/TRY|TL/gi, "").replace(/\s/g, "");
   if (s.includes(",") && s.includes(".")) {
     return Number(s.replace(/\./g, "").replace(",", ".")) || null;
   }
@@ -184,10 +191,16 @@ function normalizeStoreRow(store, x) {
   let discount = num(x?.discount_rate ?? x?.discount);
 
   if (store === "n11") {
-    // n11: campaign / sepette price should win over a higher list price.
+    // n11: SEPETTE campaign_price is the shopper's in-basket price and
+    // MUST take precedence over the shelf price. ReefAPI documents
+    // campaign_price as a Turkish-formatted string such as "10.894,11 TL".
+    // Keep price as the fallback only when no basket campaign exists.
     price = firstNumber(
-      x?.campaign?.price,
       x?.campaign_price,
+      x?.campaign?.price,
+      x?.campaign?.campaign_price,
+      x?.campaign?.basket_price,
+      x?.basket_price,
       x?.sale_price,
       x?.discounted_price,
       x?.price
