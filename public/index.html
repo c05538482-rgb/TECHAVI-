@@ -1,70 +1,72 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TechAvı — Fiyat Radar</title>
-  <meta name="description" content="Trendyol, Hepsiburada ve n11 fiyatlarını tek yerde karşılaştır.">
-  <link rel="stylesheet" href="/styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TechAvı — Akıllı Fiyat Takip</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="/">TECH<span>AV</span>I</a>
-  <div class="account" id="account"></div>
+<div class="bg"></div>
+<header>
+  <div class="logo"><span>◉</span> TechAvı</div>
+  <nav>
+    <button data-page="home">Ana Sayfa</button>
+    <button data-page="deals">🔥 Fırsatlar</button>
+    <button data-page="drops">📉 Fiyat Düşüşleri</button>
+    <button data-page="lowest">🏆 Dip Fiyatlar</button>
+  </nav>
+  <div class="head-actions">
+    <button id="favBtn" class="ghost">♡ Favoriler <i id="favCount">0</i></button>
+    <button id="alarmBtn" class="ghost">🔔 Alarmlar <i id="alarmCount">0</i></button>
+    <button id="loginBtn" class="primary">Giriş Yap</button>
+  </div>
 </header>
 
 <main>
-  <section class="hero">
-    <div class="eyebrow">CANLI FİYAT RADARI</div>
-    <h1>Aradığın ürünü bul.<br><span>En uygun fiyatı yakala.</span></h1>
-    <p>Trendyol, Hepsiburada ve n11 sonuçlarını tek ekranda karşılaştır.</p>
-    <form id="searchForm" class="search">
-      <input id="query" autocomplete="off" placeholder="Örn. LEGO Technic Supra MK4, ASUS TUF, RTX 5070..." />
-      <button>🔎 Ara</button>
-    </form>
-    <div class="hint">API key girmen gerekmez. TechAvı veriyi sunucu tarafından getirir.</div>
-  </section>
+<section class="hero">
+  <div class="hero-copy">
+    <div class="eyebrow">GERÇEK FİYATI TAKİP ET</div>
+    <h1>İndirimleri sen arama,<br><em>TechAvı</em> bulsun.</h1>
+    <p>Ürünleri ara, mağazaları karşılaştır, fiyat geçmişini gör ve istediğin fiyata düşünce haber al.</p>
+    <div class="search-wrap">
+      <div class="search"><span>⌕</span><input id="search" placeholder="Ürün, marka veya model ara..." autocomplete="off"><kbd>Ctrl K</kbd></div>
+      <div id="suggestions" class="suggestions hidden"></div>
+    </div>
+    <div class="search-hint">API key girmen gerekmez. TechAvı veriyi sunucu tarafından getirir.</div>
+  </div>
+  <div class="radar-card">
+    <div class="radar-ring r1"></div><div class="radar-ring r2"></div><div class="radar-ring r3"></div>
+    <div class="radar-sweep"></div><div class="radar-dot d1"></div><div class="radar-dot d2"></div><div class="radar-dot d3"></div>
+    <div class="radar-center">◉<small>RADAR<br>AKTİF</small></div>
+  </div>
+</section>
 
-  <section class="stores">
-    <div class="store-card"><b>Trendyol</b><span id="count-trendyol">Hazır</span></div>
-    <div class="store-card"><b>Hepsiburada</b><span id="count-hepsiburada">Hazır</span></div>
-    <div class="store-card"><b>n11</b><span id="count-n11">Hazır</span></div>
-  </section>
+<section class="store-cards" aria-label="Mağaza sonuç sayıları">
+  <button class="store-card" data-store="trendyol"><span class="store-dot trendyol"></span><strong>Trendyol</strong><small id="count-trendyol">Arama bekleniyor</small></button>
+  <button class="store-card" data-store="hepsiburada"><span class="store-dot hepsiburada"></span><strong>Hepsiburada</strong><small id="count-hepsiburada">Arama bekleniyor</small></button>
+  <button class="store-card" data-store="n11"><span class="store-dot n11"></span><strong>n11</strong><small id="count-n11">Arama bekleniyor</small></button>
+</section>
 
-  <section class="toolbar">
-    <h2 id="resultTitle">Sonuçlar</h2>
-    <div id="status"></div>
-  </section>
-  <section id="results" class="grid"></section>
+<section class="toolbar"><div><strong id="sectionTitle">🔎 Ürün ara</strong><span id="resultCount"></span></div></section>
+<section id="grid" class="grid"></section>
+
+<section class="dashboard"><div class="dash-title"><span>⚡</span><div><b>Akıllı Fiyat Takibi</b><small>TechAvı fiyatları senin için takip eder.</small></div></div>
+  <div class="dash-cards">
+    <div class="dash"><span>♡</span><b id="dashFav">0</b><small>Favori ürün</small></div>
+    <div class="dash"><span>🔔</span><b id="dashAlarm">0</b><small>Aktif fiyat alarmı</small></div>
+    <div class="dash"><span>📉</span><b>Canlı</b><small>Mağaza fiyat kontrolü</small></div>
+    <div class="dash"><span>🛡️</span><b>Sunucu</b><small>API anahtarı gizli</small></div>
+  </div>
+</section>
+
+<section class="cta">
+  <div><div class="eyebrow">FİYAT ALARMI</div><h2>“Düşünce haber ver” demen yeter.</h2><p>Bir ürün seç, hedef fiyatını gir. TechAvı senin için kontrol eder.</p></div>
+  <button id="ctaBtn" class="primary big">🔔 Alarm Oluştur</button>
+</section>
 </main>
 
-<div id="authModal" class="modal hidden">
-  <div class="modal-box">
-    <button class="x" data-close="authModal">×</button>
-    <div id="authContent"></div>
-  </div>
-</div>
-
-<div id="alarmModal" class="modal hidden">
-  <div class="modal-box">
-    <button class="x" data-close="alarmModal">×</button>
-    <h2>🔔 Fiyat Alarmı</h2>
-    <p id="alarmProduct"></p>
-    <label>Hedef fiyat (TL)</label>
-    <input id="targetPrice" type="number" min="1" step="0.01" placeholder="1800">
-    <button id="saveAlarm" class="primary">Alarmı Kur</button>
-    <div id="alarmMsg" class="msg"></div>
-  </div>
-</div>
-
-<div id="alarmsModal" class="modal hidden">
-  <div class="modal-box wide">
-    <button class="x" data-close="alarmsModal">×</button>
-    <h2>🔔 Alarmlarım</h2>
-    <div id="alarmList"></div>
-  </div>
-</div>
-
-<script src="/app.js"></script>
-</body>
-</html>
+<div id="modal" class="modal hidden"><div class="modal-box"><button class="close">×</button><div id="modalBody"></div></div></div>
+<div id="toast"></div>
+<script src="app.js"></script>
+</body></html>
