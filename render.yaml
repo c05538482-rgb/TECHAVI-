@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: techav1-v2
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REEF_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: JOB_SECRET
+        sync: false
+      - key: RESEND_FROM
+        value: "TechAvı <onboarding@resend.dev>"
+      - key: APP_URL
+        value: "https://techav1.onrender.com"
