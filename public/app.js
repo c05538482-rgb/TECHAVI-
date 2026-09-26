@@ -77,6 +77,9 @@ function renderCard(p) {
       <div class="name" title="${esc(p.title)}">${esc(p.title)}</div>
       <div class="price-line"><span class="price">${money(p.price)}</span>${p.originalPrice && Number(p.originalPrice) > Number(p.price) ? `<span class="old">${money(p.originalPrice)}</span>` : ""}</div>
       <div class="store">● ${esc(storeName(p.store))}${p.stock ? " • Stok bilgisi mevcut" : ""}</div>
+      <div class="card-actions">
+        ${p.url && p.url !== "#" ? `<a class="store-link" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" data-store-link>Mağazaya Git ↗</a>` : `<button class="store-link disabled" type="button" disabled>Mağaza bağlantısı yok</button>`}
+      </div>
       <div class="bar"><i style="width:${Math.min(100, Math.max(12, d || 12))}%"></i></div>
     </div>
   </article>`;
@@ -107,6 +110,7 @@ function render() {
 
   $$(".card").forEach(card => card.addEventListener("click", e => {
     if (e.target.closest("[data-heart]")) return;
+    if (e.target.closest("[data-store-link]")) return;
     openProduct(decodeURIComponent(card.dataset.id));
   }));
   $$('[data-heart]').forEach(btn => btn.addEventListener("click", e => {
