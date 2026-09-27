@@ -1,0 +1,7 @@
+TechAvı alarm + push fix
+
+- Alarm API now receives store keys (trendyol/hepsiburada/n11/etc.) instead of display names.
+- Target price input is larger and readable, with mobile-friendly layout.
+- Amazon Türkiye, Pazarama and Çiçeksepeti are mapped for alarms.
+- Push subscription waits for an active Service Worker via navigator.serviceWorker.ready.
+- Existing pricing logic in server.js was not changed by this fix.

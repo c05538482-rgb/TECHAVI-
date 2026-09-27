@@ -72,3 +72,18 @@ body.modal-open{overflow:hidden}
 .filter-note{grid-column:1/-1;color:#708091;font-size:12px;margin-top:-6px}
 @media(max-width:700px){.store-cards{grid-template-columns:1fr}.suggestions{top:67px}}
 .auth-box{display:flex;flex-direction:column;gap:12px}.auth-box input{background:#080c11;border:1px solid #ffffff18;color:#fff;padding:12px;border-radius:9px;outline:0}.auth-tabs{display:flex;gap:7px;margin-bottom:5px}.auth-tabs button{background:#101820;padding:10px 13px;border-radius:9px}.auth-tabs .active{background:#18352f;color:#52e8ba}.auth-box .primary{width:100%}.msg{min-height:20px;color:#ff9b9b;font-size:13px}.danger{background:#321b20;color:#ffb1b8;padding:8px 10px;border-radius:8px}.cheapest{border:1px solid #38dca944!important;background:#10231f!important}.modal-open{overflow:hidden}.offer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px}.offer-head h3{margin:0}.offer-head span{font-size:11px;color:#6f8190}
+
+
+/* Fiyat alarmı düzeltmesi */
+.alarm-box{width:min(620px,92vw);max-width:620px}
+.alarm-form{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end;margin-top:18px}
+.alarm-form label{grid-column:1/-1;display:block;font-size:13px;font-weight:700;color:#aebbc7;margin-bottom:-5px}
+.alarm-form input#targetPrice{width:100%;min-width:0;height:56px;padding:0 16px;border-radius:12px;border:1px solid #ffffff22;background:#0d141c;color:#f4f8fb;font-size:20px;font-weight:700;outline:none;box-sizing:border-box}
+.alarm-form input#targetPrice:focus{border-color:#39ddb0;box-shadow:0 0 0 3px #39ddb01c}
+.alarm-form input#targetPrice::placeholder{color:#718090;font-size:16px}
+.alarm-form button#saveAlarm{height:56px;white-space:nowrap;padding:0 24px}
+@media(max-width:600px){
+  .alarm-box{width:min(94vw,620px)}
+  .alarm-form{grid-template-columns:1fr}
+  .alarm-form button#saveAlarm{width:100%}
+}

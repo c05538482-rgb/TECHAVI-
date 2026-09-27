@@ -42,8 +42,10 @@
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') { alert('Bildirim izni verilmedi.'); return; }
     const reg = await navigator.serviceWorker.register('/sw.js', { scope:'/' });
-    const existing = await reg.pushManager.getSubscription();
-    const sub = existing || await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToBytes(keyData.publicKey) });
+    // Register returns before activation on some browsers; wait until an active worker exists.
+    const activeReg = await navigator.serviceWorker.ready;
+    const existing = await activeReg.pushManager.getSubscription();
+    const sub = existing || await activeReg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:b64ToBytes(keyData.publicKey) });
     const r = await fetch(SUB_URL, { method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify({subscription:sub.toJSON()}) });
     const result = await r.json();
     if (!result.ok) throw new Error(result.error || 'Abonelik başarısız');

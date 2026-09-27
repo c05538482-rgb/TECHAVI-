@@ -53,7 +53,30 @@ function productImage(p, cls = "product-image") {
 }
 
 function storeName(s) {
-  return ({trendyol:"Trendyol", hepsiburada:"Hepsiburada", n11:"n11", mediamarkt:"MediaMarkt", teknosa:"Teknosa", vatan:"Vatan Bilgisayar"}[String(s).toLowerCase()] || s || "Mağaza");
+  return ({
+    trendyol:"Trendyol",
+    hepsiburada:"Hepsiburada",
+    n11:"n11",
+    mediamarkt:"MediaMarkt",
+    teknosa:"Teknosa",
+    vatan:"Vatan Bilgisayar",
+    amazon:"Amazon Türkiye",
+    pazarama:"Pazarama",
+    ciceksepeti:"Çiçeksepeti"
+  }[String(s).toLowerCase()] || s || "Mağaza");
+}
+function storeKey(s) {
+  const x = String(s || "").toLowerCase().trim();
+  if (x.includes("trendyol")) return "trendyol";
+  if (x.includes("hepsiburada")) return "hepsiburada";
+  if (x === "n11" || x.includes("n11")) return "n11";
+  if (x.includes("mediamarkt")) return "mediamarkt";
+  if (x.includes("teknosa")) return "teknosa";
+  if (x.includes("vatan")) return "vatan";
+  if (x.includes("amazon")) return "amazon";
+  if (x.includes("pazarama")) return "pazarama";
+  if (x.includes("ciceksepeti") || x.includes("çiçeksepeti")) return "ciceksepeti";
+  return x;
 }
 function storeKey(s) {
   const x = String(s || "").toLowerCase();
@@ -314,12 +337,15 @@ function renderAuthForm(mode) {
 function openAlarm(p) {
   if (!state.user) { openAuth("login"); toast("Fiyat alarmı için önce giriş yapmalısın."); return; }
   state.selected = p;
-  $("#modalBody").innerHTML = `<div class="auth-box"><h2>🔔 Fiyat Alarmı</h2><p><b>${esc(p.title)}</b><br>${esc(storeName(p.store))} · mevcut: <b>${money(p.price)}</b></p><div class="alarm-form"><input id="targetPrice" type="number" min="1" step="0.01" placeholder="Hedef fiyat"><button id="saveAlarm" class="primary">Alarmı Kur</button></div><div id="alarmMsg" class="msg"></div></div>`;
+  $("#modalBody").innerHTML = `<div class="auth-box alarm-box"><h2>🔔 Fiyat Alarmı</h2><p><b>${esc(p.title)}</b><br>${esc(storeName(p.store))} · mevcut: <b>${money(p.price)}</b></p><div class="alarm-form"><label for="targetPrice">Hedef fiyat</label><input id="targetPrice" type="number" inputmode="decimal" min="1" step="0.01" placeholder="Örn. 1.500" autocomplete="off"><button id="saveAlarm" class="primary">Alarmı Kur</button></div><div id="alarmMsg" class="msg"></div></div>`;
+  const targetInput = $("#targetPrice");
+  requestAnimationFrame(() => { targetInput.focus(); targetInput.select(); });
   $("#saveAlarm").onclick = async () => {
-    const target = Number($("#targetPrice").value);
-    if (!target || target <= 0) return $("#alarmMsg").textContent = "Hedef fiyat gir.";
+    const raw = String(targetInput.value || "").replace(/\s/g, "").replace(",", ".");
+    const target = Number(raw);
+    if (!Number.isFinite(target) || target <= 0) return $("#alarmMsg").textContent = "Geçerli bir hedef fiyat gir.";
     try {
-      await api("/api/alarms", { method: "POST", body: JSON.stringify({ store: storeName(p.store), title: p.title, url: p.url, productId: p.id, targetPrice: target }) });
+      await api("/api/alarms", { method: "POST", body: JSON.stringify({ store: storeKey(p.store), title: p.title, url: p.url, productId: p.id, targetPrice: target }) });
       $("#alarmMsg").textContent = "✅ Alarm kuruldu.";
       await loadAlarms(true);
     } catch (e) { $("#alarmMsg").textContent = e.message; }
