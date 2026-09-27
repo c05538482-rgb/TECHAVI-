@@ -105,8 +105,11 @@ function normalizeQuery(q) {
 }
 
 function cacheKey(store, query) {
+  // n11 cache key is versioned so old shelf-price-only rows cannot survive
+  // the SEPETTE enrichment fix. Trendyol and Hepsiburada keys stay unchanged.
+  const version = store === "n11" ? "|n11-sepette-v4" : "";
   return crypto.createHash("sha256")
-    .update(`${store}|${normalizeQuery(query)}`)
+    .update(`${store}${version}|${normalizeQuery(query)}`)
     .digest("hex");
 }
 
@@ -119,14 +122,14 @@ async function getCache(key) {
   return r.rows[0]?.payload || null;
 }
 
-async function setCache(key, payload) {
+async function setCache(key, payload, ttlSeconds = CACHE_TTL) {
   if (!DATABASE_URL) return;
   await db(`
     INSERT INTO search_cache(cache_key,payload,expires_at)
     VALUES($1,$2,NOW() + ($3 * INTERVAL '1 second'))
     ON CONFLICT(cache_key) DO UPDATE
     SET payload=EXCLUDED.payload, expires_at=EXCLUDED.expires_at
-  `, [key, JSON.stringify(payload), CACHE_TTL]);
+  `, [key, JSON.stringify(payload), ttlSeconds]);
 }
 
 async function reef(path, body) {
@@ -182,6 +185,77 @@ function firstNumber(...values) {
 
 function pickImage(x) {
   return x?.image || x?.image_url || x?.thumbnail || x?.images?.[0] || x?.gallery?.[0] || null;
+}
+
+// n11 search cards expose the shelf price, while the real SEPETTE price is
+// available on product/detail. We enrich n11 rows only; Trendyol and
+// Hepsiburada never enter this function. Detail responses are cached for 24h
+// because each detail call costs 2 ReefAPI credits.
+async function getN11Detail(x) {
+  const productId = x?.product_id ?? x?.id;
+  const url = x?.url || x?.product_url || x?.link;
+  if (!productId && !url) return null;
+
+  const identity = String(productId || url);
+  const key = crypto.createHash("sha256")
+    .update(`n11-detail-v1|${identity}`)
+    .digest("hex");
+
+  const cached = await getCache(key);
+  if (cached) return cached;
+
+  try {
+    const response = await reef("/n11/v1/product/detail", productId
+      ? { product_id: String(productId) }
+      : { url });
+
+    const detail = response?.data?.product || response?.data?.data || response?.data || null;
+    if (!detail || typeof detail !== "object") return null;
+
+    // 24h cache: the product detail is the expensive part and should not be
+    // requested again every 10-minute search-cache refresh.
+    await setCache(key, detail, 60 * 60 * 24);
+    return detail;
+  } catch (e) {
+    console.warn(`[n11 detail] ${identity}: ${e.message}`);
+    return null;
+  }
+}
+
+async function enrichN11Rows(rows) {
+  if (!rows.length) return rows;
+
+  const enriched = new Array(rows.length);
+  let next = 0;
+  const workerCount = Math.min(4, rows.length);
+
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= rows.length) return;
+
+      const row = rows[index];
+      // If search already supplied a basket price, do not spend a detail call.
+      const hasBasketPrice = firstNumber(
+        row?.campaign_price,
+        row?.campaign?.price,
+        row?.campaign?.campaign_price,
+        row?.campaign?.basket_price,
+        row?.basket_price
+      ) != null;
+
+      if (hasBasketPrice) {
+        enriched[index] = row;
+        continue;
+      }
+
+      const detail = await getN11Detail(row);
+      enriched[index] = detail ? { ...row, ...detail } : row;
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return enriched;
 }
 
 function normalizeStoreRow(store, x) {
@@ -263,7 +337,14 @@ async function searchStore(store, query) {
     throw new Error("Desteklenmeyen mağaza");
   }
 
-  const rows = response?.data?.results || response?.data?.products || [];
+  let rows = response?.data?.results || response?.data?.products || [];
+
+  // IMPORTANT: only n11 is enriched here. Trendyol and Hepsiburada keep
+  // their existing search pipeline and price fields exactly as before.
+  if (store === "n11") {
+    rows = await enrichN11Rows(rows);
+  }
+
   const result = {
     store,
     count: Number(response?.meta?.total_count ?? response?.data?.total_count ?? rows.length) || rows.length,
