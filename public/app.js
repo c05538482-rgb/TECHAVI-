@@ -11,7 +11,7 @@ const state = {
   searchTimer: null,
   controller: null,
   requestId: 0,
-  storeCounts: { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null },
+  storeCounts: { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null, amazon: null },
   favorites: new Set(JSON.parse(localStorage.getItem("techavi_favs") || "[]"))
 };
 
@@ -86,6 +86,7 @@ function storeKey(s) {
   if (x.includes("mediamarkt")) return "mediamarkt";
   if (x.includes("teknosa")) return "teknosa";
   if (x.includes("vatan")) return "vatan";
+  if (x.includes("amazon")) return "amazon";
   return x;
 }
 
@@ -152,7 +153,7 @@ function render() {
 function showLoading(q) {
   $("#sectionTitle").textContent = `🔎 "${q}" aranıyor`;
   $("#resultCount").textContent = "• mağazalar kontrol ediliyor...";
-  $("#grid").innerHTML = `<div class="loading-grid"><div class="loading-spinner"></div><span>Trendyol, Hepsiburada, n11, MediaMarkt, Teknosa ve Vatan aranıyor…</span></div>`;
+  $("#grid").innerHTML = `<div class="loading-grid"><div class="loading-spinner"></div><span>Trendyol, Hepsiburada, n11, MediaMarkt, Teknosa, Vatan ve Amazon Türkiye aranıyor…</span></div>`;
 }
 
 async function searchProducts(q) {
@@ -166,7 +167,7 @@ async function searchProducts(q) {
 
   if (clean.length < 2) {
     state.allProducts = [];
-    state.storeCounts = { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null };
+    state.storeCounts = { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null, amazon: null };
     renderStoreCounts();
     render();
     return;
@@ -192,7 +193,8 @@ async function searchProducts(q) {
       n11: j.stores?.n11?.count ?? 0,
       mediamarkt: j.stores?.mediamarkt?.count ?? 0,
       teknosa: j.stores?.teknosa?.count ?? 0,
-      vatan: j.stores?.vatan?.count ?? 0
+      vatan: j.stores?.vatan?.count ?? 0,
+      amazon: j.stores?.amazon?.count ?? 0
     };
     renderStoreCounts();
     render();
