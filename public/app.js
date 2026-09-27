@@ -113,7 +113,7 @@ function renderCard(p) {
 }
 
 function renderStoreCounts() {
-  for (const key of ["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan"]) {
+  for (const key of ["trendyol", "hepsiburada", "n11", "amazon", "mediamarkt", "teknosa", "vatan"]) {
     const value = state.storeCounts[key];
     $(`#count-${key}`).textContent = value == null ? "Arama bekleniyor" : `${Number(value).toLocaleString("tr-TR")} ürün bulundu`;
   }
