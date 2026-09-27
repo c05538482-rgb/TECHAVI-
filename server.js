@@ -107,7 +107,7 @@ function normalizeQuery(q) {
 function cacheKey(store, query) {
   // n11 cache key is versioned so old shelf-price-only rows cannot survive
   // the SEPETTE enrichment fix. Trendyol and Hepsiburada keys stay unchanged.
-  const version = store === "n11" ? "|n11-sepette-v4" : "";
+  const version = store === "n11" ? "|n11-sepette-v5" : "";
   return crypto.createHash("sha256")
     .update(`${store}${version}|${normalizeQuery(query)}`)
     .digest("hex");
@@ -191,31 +191,88 @@ function pickImage(x) {
 // available on product/detail. We enrich n11 rows only; Trendyol and
 // Hepsiburada never enter this function. Detail responses are cached for 24h
 // because each detail call costs 2 ReefAPI credits.
+function extractN11BasketPrice(value, seen = new Set()) {
+  if (value == null || typeof value !== "object") return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+
+  // ReefAPI documents campaign_price as the exact Turkish-formatted
+  // SEPETTE price. Search recursively because n11's detail payload can
+  // place campaign information at different nesting levels.
+  const exactKeys = ["campaign_price", "basket_price", "basketPrice", "in_basket_price", "inBasketPrice"];
+  for (const key of exactKeys) {
+    if (value[key] != null) {
+      const n = num(value[key]);
+      if (n != null && n > 0) return n;
+    }
+  }
+
+  // Some responses wrap the campaign fields in an object.
+  for (const key of ["campaign", "campaigns", "basket", "basket_offer", "offers", "pricing", "price_info"]) {
+    const child = value[key];
+    if (child == null) continue;
+    const n = extractN11BasketPrice(child, seen);
+    if (n != null && n > 0) return n;
+  }
+
+  // Last resort: if n11 gives only the SEPETTE percentage, calculate the
+  // shopper price from the shelf price. This is only used when the response
+  // explicitly says SEPETTE; we never subtract an unrelated campaign number.
+  const campaignText = [value.campaign, value.campaign_text, value.campaign_label, value.badge, value.label]
+    .filter(v => typeof v === "string")
+    .join(" | ");
+  if (/sepet/i.test(campaignText)) {
+    const amountMatches = campaignText.match(/(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{1,2})?\s*(?:TL|₺)/gi);
+    if (amountMatches?.length) {
+      const n = num(amountMatches[amountMatches.length - 1]);
+      if (n != null && n > 0) return n;
+    }
+
+    const pct = campaignText.match(/%\s*(\d+(?:[.,]\d+)?)/);
+    const shelf = firstNumber(value.price, value.price_value, value.current_price, value.sale_price);
+    if (pct && shelf != null) {
+      const rate = Number(pct[1].replace(",", "."));
+      if (Number.isFinite(rate) && rate > 0 && rate < 100) {
+        return Math.round((shelf * (1 - rate / 100)) * 100) / 100;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function getN11Detail(x) {
   const productId = x?.product_id ?? x?.id;
   const url = x?.url || x?.product_url || x?.link;
   if (!productId && !url) return null;
 
-  const identity = String(productId || url);
+  // URL is the most reliable n11 product/detail identifier according to the
+  // current ReefAPI documentation. Fall back to product_id only if no URL exists.
+  const identity = String(url || productId);
   const key = crypto.createHash("sha256")
-    .update(`n11-detail-v1|${identity}`)
+    .update(`n11-detail-v2|${identity}`)
     .digest("hex");
 
   const cached = await getCache(key);
   if (cached) return cached;
 
   try {
-    const response = await reef("/n11/v1/product/detail", productId
-      ? { product_id: String(productId) }
-      : { url });
+    const response = await reef("/n11/v1/product/detail", url
+      ? { url }
+      : { product_id: String(productId) });
 
     const detail = response?.data?.product || response?.data?.data || response?.data || null;
     if (!detail || typeof detail !== "object") return null;
 
-    // 24h cache: the product detail is the expensive part and should not be
-    // requested again every 10-minute search-cache refresh.
-    await setCache(key, detail, 60 * 60 * 24);
-    return detail;
+    const basketPrice = extractN11BasketPrice(detail);
+    // Store the resolved shopper price under a private normalized field so the
+    // search-row price can never accidentally win later.
+    const normalized = basketPrice != null
+      ? { ...detail, __n11_basket_price: basketPrice }
+      : detail;
+
+    await setCache(key, normalized, 60 * 60 * 24);
+    return normalized;
   } catch (e) {
     console.warn(`[n11 detail] ${identity}: ${e.message}`);
     return null;
@@ -235,17 +292,9 @@ async function enrichN11Rows(rows) {
       if (index >= rows.length) return;
 
       const row = rows[index];
-      // If search already supplied a basket price, do not spend a detail call.
-      const hasBasketPrice = firstNumber(
-        row?.campaign_price,
-        row?.campaign?.price,
-        row?.campaign?.campaign_price,
-        row?.campaign?.basket_price,
-        row?.basket_price
-      ) != null;
-
-      if (hasBasketPrice) {
-        enriched[index] = row;
+      const existingBasket = extractN11BasketPrice(row);
+      if (existingBasket != null) {
+        enriched[index] = { ...row, __n11_basket_price: existingBasket };
         continue;
       }
 
@@ -270,6 +319,8 @@ function normalizeStoreRow(store, x) {
     // campaign_price as a Turkish-formatted string such as "10.894,11 TL".
     // Keep price as the fallback only when no basket campaign exists.
     price = firstNumber(
+      x?.__n11_basket_price,
+      extractN11BasketPrice(x),
       x?.campaign_price,
       x?.campaign?.price,
       x?.campaign?.campaign_price,
