@@ -11,7 +11,7 @@ const state = {
   searchTimer: null,
   controller: null,
   requestId: 0,
-  storeCounts: { trendyol: null, hepsiburada: null, n11: null },
+  storeCounts: { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null },
   favorites: new Set(JSON.parse(localStorage.getItem("techavi_favs") || "[]"))
 };
 
@@ -53,13 +53,16 @@ function productImage(p, cls = "product-image") {
 }
 
 function storeName(s) {
-  return ({trendyol:"Trendyol", hepsiburada:"Hepsiburada", n11:"n11"}[String(s).toLowerCase()] || s || "Mağaza");
+  return ({trendyol:"Trendyol", hepsiburada:"Hepsiburada", n11:"n11", mediamarkt:"MediaMarkt", teknosa:"Teknosa", vatan:"Vatan Bilgisayar"}[String(s).toLowerCase()] || s || "Mağaza");
 }
 function storeKey(s) {
   const x = String(s || "").toLowerCase();
   if (x.includes("trendyol")) return "trendyol";
   if (x.includes("hepsiburada")) return "hepsiburada";
   if (x === "n11" || x.includes("n11")) return "n11";
+  if (x.includes("mediamarkt")) return "mediamarkt";
+  if (x.includes("teknosa")) return "teknosa";
+  if (x.includes("vatan")) return "vatan";
   return x;
 }
 
@@ -86,7 +89,7 @@ function renderCard(p) {
 }
 
 function renderStoreCounts() {
-  for (const key of ["trendyol", "hepsiburada", "n11"]) {
+  for (const key of ["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan"]) {
     const value = state.storeCounts[key];
     $(`#count-${key}`).textContent = value == null ? "Arama bekleniyor" : `${Number(value).toLocaleString("tr-TR")} ürün bulundu`;
   }
@@ -126,7 +129,7 @@ function render() {
 function showLoading(q) {
   $("#sectionTitle").textContent = `🔎 "${q}" aranıyor`;
   $("#resultCount").textContent = "• mağazalar kontrol ediliyor...";
-  $("#grid").innerHTML = `<div class="loading-grid"><div class="loading-spinner"></div><span>Trendyol, Hepsiburada ve n11 aranıyor…</span></div>`;
+  $("#grid").innerHTML = `<div class="loading-grid"><div class="loading-spinner"></div><span>Trendyol, Hepsiburada, n11, MediaMarkt, Teknosa ve Vatan aranıyor…</span></div>`;
 }
 
 async function searchProducts(q) {
@@ -140,7 +143,7 @@ async function searchProducts(q) {
 
   if (clean.length < 2) {
     state.allProducts = [];
-    state.storeCounts = { trendyol: null, hepsiburada: null, n11: null };
+    state.storeCounts = { trendyol: null, hepsiburada: null, n11: null, mediamarkt: null, teknosa: null, vatan: null };
     renderStoreCounts();
     render();
     return;
@@ -163,7 +166,10 @@ async function searchProducts(q) {
     state.storeCounts = {
       trendyol: j.stores?.trendyol?.count ?? 0,
       hepsiburada: j.stores?.hepsiburada?.count ?? 0,
-      n11: j.stores?.n11?.count ?? 0
+      n11: j.stores?.n11?.count ?? 0,
+      mediamarkt: j.stores?.mediamarkt?.count ?? 0,
+      teknosa: j.stores?.teknosa?.count ?? 0,
+      vatan: j.stores?.vatan?.count ?? 0
     };
     renderStoreCounts();
     render();

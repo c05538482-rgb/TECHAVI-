@@ -107,7 +107,7 @@ function normalizeQuery(q) {
 function cacheKey(store, query) {
   // n11 and Trendyol cache keys are versioned so old price rows cannot survive
   // the SEPETTE/TY+ enrichment fixes. Hepsiburada key stays unchanged.
-  const version = store === "n11" ? "|n11-sepette-v5" : (store === "trendyol" ? "|trendyol-plus-v1" : "");
+  const version = store === "n11" ? "|n11-sepette-v5" : (store === "trendyol" ? "|trendyol-price-v2" : "");
   return crypto.createHash("sha256")
     .update(`${store}${version}|${normalizeQuery(query)}`)
     .digest("hex");
@@ -172,6 +172,25 @@ function num(v) {
     return Number(s.replace(/\./g, "").replace(",", ".")) || null;
   }
   if (s.includes(",")) return Number(s.replace(",", ".")) || null;
+  return Number(s) || null;
+}
+
+function trendyolNum(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (v == null) return null;
+  if (typeof v === "object") {
+    for (const key of ["current_value", "price_value", "value", "amount", "current", "price", "sale", "discounted", "final"]) {
+      const n = trendyolNum(v[key]);
+      if (n != null && n > 0) return n;
+    }
+    return null;
+  }
+  const s = String(v).replace(/TRY|TL/gi, "").replace(/₺/g, "").replace(/\s/g, "").trim();
+  if (!s) return null;
+  // Trendyol's formatted strings use Turkish notation: 12.999 TL = 12999,
+  // while 395,99 TL = 395.99. Never parse a dot-only value as 12.999.
+  if (s.includes(",")) return Number(s.replace(/\./g, "").replace(",", ".")) || null;
+  if (/^\d{1,3}(?:\.\d{3})+$/.test(s)) return Number(s.replace(/\./g, "")) || null;
   return Number(s) || null;
 }
 
@@ -387,7 +406,7 @@ async function getTrendyolDetail(x) {
 
   const identity = String(url || contentId);
   const key = crypto.createHash("sha256")
-    .update(`trendyol-plus-v1|${identity}`)
+    .update(`trendyol-price-v2|${identity}`)
     .digest("hex");
 
   const cached = await getCache(key);
@@ -459,6 +478,21 @@ function normalizeStoreRow(store, x) {
       x?.price
     );
     original = firstNumber(x?.original_price, x?.list_price, x?.old_price);
+  } else if (store === "mediamarkt") {
+    price = firstNumber(x?.price, x?.current_price, x?.sale_price);
+    original = firstNumber(x?.was_price, x?.original_price, x?.list_price);
+    discount = num(x?.discount_percent ?? x?.discount);
+  } else if (store === "teknosa") {
+    price = firstNumber(x?.price, x?.current_price, x?.sale_price);
+    original = firstNumber(x?.was_price, x?.original_price, x?.list_price);
+    discount = num(x?.discount_percent ?? x?.discount);
+  } else if (store === "vatan") {
+    // Vatan's `price` is the public online/Web'e Özel shopper price.
+    // Keep basket_price separate; do not replace the displayed price with a
+    // basket-only offer unless the site/API says it is the main price.
+    price = firstNumber(x?.price, x?.current_price, x?.sale_price);
+    original = firstNumber(x?.was_price, x?.regular_price, x?.original_price, x?.list_price);
+    discount = num(x?.discount_percent ?? x?.discount);
   } else {
     if (store === "trendyol" && x?.__trendyol_plus_price != null) {
       // ONLY override the Trendyol price when ReefAPI explicitly exposed a
@@ -468,19 +502,19 @@ function normalizeStoreRow(store, x) {
       price = firstNumber(x.__trendyol_plus_price);
     }
     if (price == null) {
-      price = firstNumber(
-        x?.price_value,
-        x?.price,
-        x?.current_value,
-        x?.current_price,
-        x?.sale_price,
-        x?.special_price
+      price = trendyolNum(
+        x?.price_value ??
+        x?.current_value ??
+        x?.current_price ??
+        x?.sale_price ??
+        x?.special_price ??
+        x?.price
       );
     }
-    original = firstNumber(
-      x?.original_price,
-      x?.list_price,
-      x?.listPrice,
+    original = trendyolNum(
+      x?.original_price ??
+      x?.list_price ??
+      x?.listPrice ??
       x?.old_price
     );
   }
@@ -521,6 +555,12 @@ async function searchStore(store, query) {
     response = await reef("/hepsiburada/v1/search", { query, page: 1 });
   } else if (store === "n11") {
     response = await reef("/n11/v1/search", { query, page: 1 });
+  } else if (store === "mediamarkt") {
+    response = await reef("/mediamarkt/v1/search", { query, country: "tr", page: 1 });
+  } else if (store === "teknosa") {
+    response = await reef("/teknosa/v1/search", { query, page: 1 });
+  } else if (store === "vatan") {
+    response = await reef("/vatan/v1/search", { query, page: 1 });
   } else {
     throw new Error("Desteklenmeyen mağaza");
   }
@@ -611,7 +651,7 @@ app.get("/api/search", async (req, res) => {
   const query = normalizeQuery(req.query.q);
   if (query.length < 2) return res.status(400).json({ ok: false, error: "En az 2 karakter yaz." });
 
-  const stores = ["trendyol", "hepsiburada", "n11"];
+  const stores = ["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan"];
   const settled = await Promise.allSettled(stores.map(s => searchStore(s, query)));
   const results = {};
   const errors = {};
