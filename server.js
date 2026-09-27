@@ -105,9 +105,9 @@ function normalizeQuery(q) {
 }
 
 function cacheKey(store, query) {
-  // n11 cache key is versioned so old shelf-price-only rows cannot survive
-  // the SEPETTE enrichment fix. Trendyol and Hepsiburada keys stay unchanged.
-  const version = store === "n11" ? "|n11-sepette-v5" : "";
+  // n11 and Trendyol cache keys are versioned so old price rows cannot survive
+  // the SEPETTE/TY+ enrichment fixes. Hepsiburada key stays unchanged.
+  const version = store === "n11" ? "|n11-sepette-v5" : (store === "trendyol" ? "|trendyol-plus-v1" : "");
   return crypto.createHash("sha256")
     .update(`${store}${version}|${normalizeQuery(query)}`)
     .digest("hex");
@@ -307,6 +307,134 @@ async function enrichN11Rows(rows) {
   return enriched;
 }
 
+
+// Trendyol Plus / SEPETTE fiyatı: search endpoint yalnızca normal fiyatı döndürebilir.
+// product/detail ise TY+ fiyatı ve campaign/campaigns bilgisini sağlar.
+function extractTrendyolPlusPrice(value, seen = new Set()) {
+  if (value == null) return null;
+  if (typeof value !== "object") return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+
+  const exactKeys = [
+    "ty_plus_price", "tyPlusPrice", "plus_price", "plusPrice",
+    "ty_plus", "tyPlus", "plus_member_price", "plusMemberPrice",
+    "loyalty_price", "loyaltyPrice"
+  ];
+  for (const key of exactKeys) {
+    const v = value[key];
+    if (v != null) {
+      if (typeof v === "object") {
+        const n = firstNumber(v?.value, v?.amount, v?.price, v?.current_value, v?.current);
+        if (n != null && n > 0) return n;
+      } else {
+        const n = num(v);
+        if (n != null && n > 0) return n;
+      }
+    }
+  }
+
+  // ReefAPI may expose the TY+ amount inside the price object.
+  if (value.price && typeof value.price === "object") {
+    for (const key of exactKeys) {
+      const n = num(value.price[key]?.value ?? value.price[key]?.amount ?? value.price[key]);
+      if (n != null && n > 0) return n;
+    }
+  }
+
+  // Campaign text such as:
+  // "Trendyol Plus'a Özel - Sepette 395,99 TL"
+  // Only accept an amount when the SAME text explicitly mentions both
+  // Trendyol Plus and Sepette. This prevents unrelated public coupons from
+  // changing the normal product price.
+  const textParts = [];
+  for (const key of ["text", "title", "name", "description", "label", "message", "campaign_text", "badge"]) {
+    if (typeof value[key] === "string") textParts.push(value[key]);
+  }
+  const text = textParts.join(" | ");
+  if (/trendyol\s*plus/i.test(text) && /sepet/i.test(text)) {
+    const afterBasket = text.match(/sepet[^0-9]*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)\s*(?:TL|₺)/i);
+    if (afterBasket) {
+      const n = num(afterBasket[1]);
+      if (n != null && n > 0) return n;
+    }
+  }
+
+  // Walk campaign/price containers recursively, but do NOT walk the entire
+  // arbitrary object looking for a random number. That could mistake a list
+  // price, coupon threshold, review count, etc. for the Plus price.
+  for (const key of ["campaign", "campaigns", "price", "pricing", "price_info", "loyalty", "membership", "promotion"]) {
+    const child = value[key];
+    if (child == null) continue;
+    const n = extractTrendyolPlusPrice(child, seen);
+    if (n != null && n > 0) return n;
+  }
+
+  // Arrays such as campaigns[] are handled here.
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const n = extractTrendyolPlusPrice(item, seen);
+      if (n != null && n > 0) return n;
+    }
+  }
+  return null;
+}
+
+async function getTrendyolDetail(x) {
+  const contentId = x?.content_id ?? x?.id;
+  const url = x?.url || x?.product_url || x?.link;
+  if (!contentId && !url) return null;
+
+  const identity = String(url || contentId);
+  const key = crypto.createHash("sha256")
+    .update(`trendyol-plus-v1|${identity}`)
+    .digest("hex");
+
+  const cached = await getCache(key);
+  if (cached) return cached;
+
+  try {
+    const response = await reef("/trendyol/v1/product/detail", url
+      ? { url }
+      : { content_id: String(contentId) });
+    const detail = response?.data?.product || response?.data?.data || response?.data || null;
+    if (!detail || typeof detail !== "object") return null;
+
+    const plusPrice = extractTrendyolPlusPrice(detail);
+    const normalized = plusPrice != null
+      ? { ...detail, __trendyol_plus_price: plusPrice }
+      : { ...detail, __trendyol_plus_price: null };
+
+    // Plus pricing can change; 6h cache keeps credit usage reasonable while
+    // avoiding stale membership prices for a whole day.
+    await setCache(key, normalized, 60 * 60 * 6);
+    return normalized;
+  } catch (e) {
+    console.warn(`[trendyol detail] ${identity}: ${e.message}`);
+    return null;
+  }
+}
+
+async function enrichTrendyolRows(rows) {
+  if (!rows.length) return rows;
+  const enriched = new Array(rows.length);
+  let next = 0;
+  const workerCount = Math.min(4, rows.length);
+
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= rows.length) return;
+      const row = rows[index];
+      const detail = await getTrendyolDetail(row);
+      enriched[index] = detail ? { ...row, ...detail } : row;
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return enriched;
+}
+
 function normalizeStoreRow(store, x) {
   const title = x?.title || x?.name || x?.product_name || "Ürün";
   let price = null;
@@ -332,14 +460,23 @@ function normalizeStoreRow(store, x) {
     );
     original = firstNumber(x?.original_price, x?.list_price, x?.old_price);
   } else {
-    price = firstNumber(
-      x?.price_value,
-      x?.price,
-      x?.current_value,
-      x?.current_price,
-      x?.sale_price,
-      x?.special_price
-    );
+    if (store === "trendyol" && x?.__trendyol_plus_price != null) {
+      // ONLY override the Trendyol price when ReefAPI explicitly exposed a
+      // Trendyol Plus / SEPETTE price. Existing green SEPETTE pricing remains
+      // untouched because normal Trendyol search/detail price handling is the
+      // fallback below.
+      price = firstNumber(x.__trendyol_plus_price);
+    }
+    if (price == null) {
+      price = firstNumber(
+        x?.price_value,
+        x?.price,
+        x?.current_value,
+        x?.current_price,
+        x?.sale_price,
+        x?.special_price
+      );
+    }
     original = firstNumber(
       x?.original_price,
       x?.list_price,
@@ -390,10 +527,13 @@ async function searchStore(store, query) {
 
   let rows = response?.data?.results || response?.data?.products || [];
 
-  // IMPORTANT: only n11 is enriched here. Trendyol and Hepsiburada keep
-  // their existing search pipeline and price fields exactly as before.
+  // n11 keeps its existing enrichment. Trendyol gets a separate, isolated
+  // detail lookup only to detect TY+ / Plus basket pricing. Hepsiburada is
+  // completely untouched.
   if (store === "n11") {
     rows = await enrichN11Rows(rows);
+  } else if (store === "trendyol") {
+    rows = await enrichTrendyolRows(rows);
   }
 
   const result = {
