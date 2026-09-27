@@ -631,83 +631,151 @@ function requireAuth(req, res, next) {
   next();
 }
 
+
 async function brightDataAmazonTest(amazonUrl) {
-  if (!BRIGHTDATA_API_KEY) throw new Error("BRIGHTDATA_API_KEY Render'da tanımlı değil.");
+  if (!BRIGHTDATA_API_KEY) {
+    throw new Error("Bright Data API anahtarı Render'da bulunamadı.");
+  }
 
   const u = new URL(amazonUrl);
   const host = u.hostname.toLowerCase();
-  if (!(host === "amazon.com.tr" || host.endsWith(".amazon.com.tr"))) {
-    throw new Error("Bu test yalnızca amazon.com.tr ürün bağlantıları için açık.");
+  if (host !== "amazon.com.tr" && !host.endsWith(".amazon.com.tr")) {
+    throw new Error("Sadece Amazon Türkiye bağlantısı test edilebilir.");
   }
 
+  const asinMatch = u.pathname.match(/\/dp\/([A-Z0-9]{10})/i);
+  const asin = asinMatch ? asinMatch[1].toUpperCase() : "";
+
+  const payload = [{
+    url: amazonUrl,
+    origin_url: amazonUrl,
+    asin,
+    language: "tr"
+  }];
+
   const trigger = await fetch(
-    "https://api.brightdata.com/datasets/v3/trigger?dataset_id=gd_l7q7dkf244hwjntr0&format=json&uncompressed_webhook=true&include_errors=true",
+    "https://api.brightdata.com/datasets/v3/trigger?dataset_id=gd_l7q7dkf244hwjntr0&format=json&uncompressed_webhook=true",
     {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${BRIGHTDATA_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify([{ url: amazonUrl, origin_url: amazonUrl, language: "tr" }])
+      body: JSON.stringify(payload)
     }
   );
 
   const triggerJson = await trigger.json().catch(() => ({}));
+
   if (!trigger.ok || !triggerJson.snapshot_id) {
     const msg = triggerJson?.error || triggerJson?.message || `Bright Data HTTP ${trigger.status}`;
     throw new Error(String(msg));
   }
 
   const snapshotId = String(triggerJson.snapshot_id);
-  const deadline = Date.now() + 45000;
-  let lastStatus = "running";
+  const deadline = Date.now() + 60000;
+  let status = "running";
 
   while (Date.now() < deadline) {
-    const progress = await fetch(`https://api.brightdata.com/datasets/v3/progress/${encodeURIComponent(snapshotId)}`, {
-      headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` }
-    });
-    const progressJson = await progress.json().catch(() => ({}));
-    lastStatus = String(progressJson.status || "running");
+    const progress = await fetch(
+      `https://api.brightdata.com/datasets/v3/progress/${encodeURIComponent(snapshotId)}`,
+      { headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` } }
+    );
 
-    if (progress.ok && lastStatus === "ready") break;
-    if (progress.ok && ["failed", "error", "cancelled"].includes(lastStatus)) {
-      throw new Error(`Bright Data işi ${lastStatus} durumunda.`);
+    const progressJson = await progress.json().catch(() => ({}));
+    status = String(progressJson.status || "running");
+
+    if (status === "ready") break;
+    if (["failed", "error", "cancelled"].includes(status)) {
+      throw new Error(`Bright Data testi ${status} durumunda.`);
     }
 
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
-  if (lastStatus !== "ready") {
-    return { ready: false, snapshotId, status: lastStatus };
+  if (status !== "ready") {
+    return { ready: false, status, snapshotId };
   }
 
-  const snapshot = await fetch(`https://api.brightdata.com/datasets/v3/snapshot/${encodeURIComponent(snapshotId)}?format=json`, {
-    headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` }
-  });
+  const snapshot = await fetch(
+    `https://api.brightdata.com/datasets/v3/snapshot/${encodeURIComponent(snapshotId)}?format=json`,
+    { headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` } }
+  );
+
   const data = await snapshot.json().catch(() => null);
+
   if (!snapshot.ok) {
-    throw new Error(`Bright Data sonuç HTTP ${snapshot.status}`);
+    const msg = data?.error || data?.message || `Bright Data sonuç HTTP ${snapshot.status}`;
+    throw new Error(String(msg));
   }
 
   const row = Array.isArray(data) ? data[0] : data;
+
   return {
     ready: true,
     snapshotId,
     sample: row ? {
-      title: row.title || row.product_name || row.name || null,
-      price: row.final_price ?? row.price ?? row.initial_price ?? null,
+      title: row.title || row.name || row.product_name || null,
+      initialPrice: row.initial_price ?? null,
+      finalPrice: row.final_price ?? row.price ?? null,
       currency: row.currency || null,
       availability: row.availability ?? null,
-      url: row.url || null,
-      asin: row.asin || null
+      asin: row.asin || asin || null,
+      url: row.url || amazonUrl
     } : null
   };
 }
 
+app.get("/brightdata-test", (req, res) => {
+  res.type("html").send(`<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TechAvı - Bright Data Test</title>
+<style>
+body{font-family:Arial,sans-serif;background:#0b1020;color:#fff;max-width:850px;margin:40px auto;padding:20px}
+.card{background:#151d35;border:1px solid #2b3658;border-radius:16px;padding:24px}
+input{width:100%;box-sizing:border-box;padding:13px;border-radius:10px;border:1px solid #445071;background:#0f1528;color:#fff;margin:10px 0}
+button{padding:12px 18px;border:0;border-radius:10px;cursor:pointer;font-weight:700}
+#result{white-space:pre-wrap;background:#080c16;padding:16px;border-radius:10px;margin-top:16px;min-height:60px}
+a{color:#8bb8ff}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Bright Data test</h1>
+<p>Bu sayfa sadece test içindir. TechAvı'nın ana arama ve alarm sistemi burada değiştirilmez.</p>
+<input id="url" value="https://www.amazon.com.tr/dp/B0HJB2BVZ5">
+<button id="run">Amazon ürününü test et</button>
+<div id="result">Hazır. Butona bas.</div>
+<p><a href="/">← TechAvı ana sayfasına dön</a></p>
+</div>
+<script>
+document.getElementById("run").onclick = async () => {
+  const result = document.getElementById("result");
+  const url = document.getElementById("url").value.trim();
+  result.textContent = "Bright Data çalışıyor, biraz bekle...";
+  try {
+    const r = await fetch("/api/brightdata/test-amazon?url=" + encodeURIComponent(url));
+    const data = await r.json();
+    result.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    result.textContent = "Hata: " + e.message;
+  }
+};
+</script>
+</body>
+</html>`);
+});
+
 app.get("/api/brightdata/test-amazon", requireAuth, async (req, res) => {
   try {
     const url = String(req.query.url || "").trim();
-    if (!url) return res.status(400).json({ ok: false, error: "Amazon TR ürün URL'si gerekli." });
+    if (!url) {
+      return res.status(400).json({ ok: false, error: "Amazon Türkiye ürün bağlantısı gerekli." });
+    }
+
     const result = await brightDataAmazonTest(url);
     res.json({ ok: true, provider: "brightdata", ...result });
   } catch (e) {
