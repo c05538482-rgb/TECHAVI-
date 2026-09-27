@@ -6,7 +6,10 @@ const pgSession = require("connect-pg-simple")(session);
 const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { Resend } = require("resend");
+const webpush = require("web-push");
 
 const app = express();
 const PORT = Number(process.env.PORT || 10000);
@@ -15,6 +18,11 @@ const REEF_API_KEY = process.env.REEF_API_KEY;
 const APP_URL = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const CACHE_TTL = Math.max(60, Number(process.env.CACHE_TTL_SECONDS || 600));
 const ALARM_INTERVAL = Math.max(5, Number(process.env.ALARM_INTERVAL_MINUTES || 30));
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails("mailto:alerts@techavi.onrender.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
 
 if (!DATABASE_URL) console.warn("[UYARI] DATABASE_URL ayarlı değil.");
 if (!REEF_API_KEY) console.warn("[UYARI] REEF_API_KEY ayarlı değil.");
@@ -48,7 +56,7 @@ app.use(session({
   }
 }));
 
-app.use(express.static("public"));
+app.use(express.static("public", { index: false }));
 
 async function db(sql, params = []) {
   if (!DATABASE_URL) throw new Error("DATABASE_URL eksik.");
@@ -89,6 +97,16 @@ async function initDb() {
     );
 
     CREATE INDEX IF NOT EXISTS alarms_active_idx ON alarms(active);
+
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT UNIQUE NOT NULL,
+      subscription JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions(user_id);
   `);
 }
 
@@ -496,6 +514,18 @@ function normalizeStoreRow(store, x) {
     price = firstNumber(x?.price, x?.current_price, x?.sale_price);
     original = firstNumber(x?.was_price, x?.regular_price, x?.original_price, x?.list_price);
     discount = num(x?.discount_percent ?? x?.discount);
+  } else if (store === "amazon") {
+    price = num(x?.price?.value ?? x?.price);
+    original = num(x?.list_price?.value ?? x?.list_price ?? x?.was_price);
+    discount = num(x?.discount_percent ?? x?.discount);
+  } else if (store === "pazarama") {
+    price = firstNumber(x?.basket_price, x?.lowest_price, x?.price);
+    original = firstNumber(x?.price_before_discount);
+    discount = num(x?.discount_percent ?? x?.discount);
+  } else if (store === "ciceksepeti") {
+    price = firstNumber(x?.price, x?.basket_price);
+    original = firstNumber(x?.price_before_discount, x?.price_outside_basket);
+    discount = num(x?.discount_percent ?? x?.discount);
   } else {
     if (store === "trendyol" && x?.__trendyol_plus_price != null) {
       // ONLY override the Trendyol price when ReefAPI explicitly exposed a
@@ -564,6 +594,12 @@ async function searchStore(store, query) {
     response = await reef("/teknosa/v1/search", { query, page: 1 });
   } else if (store === "vatan") {
     response = await reef("/vatan/v1/search", { query, page: 1 });
+  } else if (store === "amazon") {
+    response = await reef("/amazon/v1/search", { query, marketplace: "amazon.com.tr", page: 1, max_results: 10 });
+  } else if (store === "pazarama") {
+    response = await reef("/pazarama/v1/search", { query, page: 1 });
+  } else if (store === "ciceksepeti") {
+    response = await reef("/ciceksepeti/v1/search", { query, page: 1 });
   } else {
     throw new Error("Desteklenmeyen mağaza");
   }
@@ -654,7 +690,7 @@ app.get("/api/search", async (req, res) => {
   const query = normalizeQuery(req.query.q);
   if (query.length < 2) return res.status(400).json({ ok: false, error: "En az 2 karakter yaz." });
 
-  const stores = ["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan"];
+  const stores = ["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan", "amazon", "pazarama", "ciceksepeti"];
   const settled = await Promise.allSettled(stores.map(s => searchStore(s, query)));
   const results = {};
   const errors = {};
@@ -675,6 +711,59 @@ app.get("/api/search", async (req, res) => {
   });
 });
 
+app.get("/api/push/public-key", (req, res) => {
+  res.json({ ok: Boolean(VAPID_PUBLIC_KEY), publicKey: VAPID_PUBLIC_KEY || null });
+});
+
+app.post("/api/push/subscribe", requireAuth, async (req, res) => {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    return res.status(503).json({ ok: false, error: "Push bildirimleri henüz yapılandırılmadı." });
+  }
+  const sub = req.body?.subscription;
+  if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
+    return res.status(400).json({ ok: false, error: "Geçersiz bildirim aboneliği." });
+  }
+  await db(`
+    INSERT INTO push_subscriptions(user_id,endpoint,subscription,last_used_at)
+    VALUES($1,$2,$3,NOW())
+    ON CONFLICT(endpoint) DO UPDATE SET user_id=EXCLUDED.user_id, subscription=EXCLUDED.subscription, last_used_at=NOW()
+  `, [req.session.userId, sub.endpoint, JSON.stringify(sub)]);
+  res.json({ ok: true });
+});
+
+app.delete("/api/push/subscribe", requireAuth, async (req, res) => {
+  const endpoint = String(req.body?.endpoint || "");
+  if (endpoint) await db("DELETE FROM push_subscriptions WHERE endpoint=$1 AND user_id=$2", [endpoint, req.session.userId]);
+  res.json({ ok: true });
+});
+
+async function sendPushToUser(userId, payload) {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY || !DATABASE_URL) return;
+  const r = await db("SELECT id,endpoint,subscription FROM push_subscriptions WHERE user_id=$1", [userId]);
+  for (const row of r.rows) {
+    try {
+      await webpush.sendNotification(row.subscription, JSON.stringify(payload), { TTL: 86400 });
+      await db("UPDATE push_subscriptions SET last_used_at=NOW() WHERE id=$1", [row.id]);
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) {
+        await db("DELETE FROM push_subscriptions WHERE id=$1", [row.id]);
+      } else {
+        console.warn("Push gönderim hatası", row.id, e.message);
+      }
+    }
+  }
+}
+
+app.post("/api/push/test", requireAuth, async (req, res) => {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return res.status(503).json({ ok:false, error:"Push bildirimleri yapılandırılmadı." });
+  await sendPushToUser(req.session.userId, {
+    title: "🔔 TechAvı bildirimleri aktif",
+    body: "Fiyat alarmın tetiklendiğinde telefonuna bildirim göndereceğiz.",
+    url: APP_URL
+  });
+  res.json({ ok:true });
+});
+
 app.get("/api/alarms", requireAuth, async (req, res) => {
   const r = await db(`
     SELECT id,store,title,url,current_price,target_price,active,last_checked_at,triggered_at,created_at
@@ -690,7 +779,7 @@ app.post("/api/alarms", requireAuth, async (req, res) => {
   const productId = String(req.body.productId || "").trim();
   const target = num(req.body.targetPrice);
 
-  if (!["trendyol", "hepsiburada", "n11"].includes(store) || !title || !target || target <= 0) {
+  if (!["trendyol", "hepsiburada", "n11", "mediamarkt", "teknosa", "vatan", "amazon", "pazarama", "ciceksepeti"].includes(store) || !title || !target || target <= 0) {
     return res.status(400).json({ ok: false, error: "Mağaza, ürün ve geçerli hedef fiyat gerekli." });
   }
 
@@ -747,6 +836,12 @@ async function checkAlarms() {
           await db("UPDATE alarms SET active=false,triggered_at=NOW() WHERE id=$1", [alarm.id]);
 
           const user = await db("SELECT name,email FROM users WHERE id=$1", [alarm.user_id]);
+          await sendPushToUser(alarm.user_id, {
+            title: "🔔 TechAvı — fiyat düştü!",
+            body: `${alarm.title} — ${Number(price).toLocaleString("tr-TR")} TL`,
+            url: alarm.url || APP_URL,
+            store: alarm.store
+          });
           if (resend && user.rows[0]?.email) {
             const from = process.env.RESEND_FROM || "TechAvı <onboarding@resend.dev>";
             await resend.emails.send({
@@ -790,8 +885,26 @@ app.post("/api/jobs/check-alarms", async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/sw.js", (req, res) => {
+  res.type("application/javascript").sendFile(path.join(process.cwd(), "public", "sw.js"));
+});
+
+app.get("/push-client.js", (req, res) => {
+  res.type("application/javascript").sendFile(path.join(process.cwd(), "public", "push-client.js"));
+});
+
+app.get("/", (req, res, next) => {
+  const indexPath = path.join(process.cwd(), "public", "index.html");
+  fs.readFile(indexPath, "utf8", (err, html) => {
+    if (err) return next(err);
+    const inject = `<script src="/push-client.js" defer></script>`;
+    const out = html.includes("/push-client.js") ? html : html.replace(/<\/head>/i, `${inject}</head>`);
+    res.type("html").send(out);
+  });
+});
+
 app.use((req, res) => {
-  res.sendFile(require("path").join(process.cwd(), "public", "index.html"));
+  res.sendFile(path.join(process.cwd(), "public", "index.html"));
 });
 
 (async () => {

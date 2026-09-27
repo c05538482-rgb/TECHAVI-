@@ -18,6 +18,7 @@
     "express": "^5.1.0",
     "express-session": "^1.18.2",
     "pg": "^8.16.3",
-    "resend": "^6.1.2"
+    "resend": "^6.1.2",
+    "web-push": "^3.6.7"
   }
 }
