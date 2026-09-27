@@ -328,6 +328,9 @@ async function enrichN11Rows(rows) {
 
 
 // Trendyol Plus / SEPETTE fiyatı: search endpoint yalnızca normal fiyatı döndürebilir.
+// IMPORTANT: Trendyol formatted prices must ALWAYS be parsed with trendyolNum.
+// A value such as "12.999 TL" is 12999 TRY, not 12.999. Using the generic
+// num() here caused cards to show values such as 13 TL / 78 TL / 100 TL.
 // product/detail ise TY+ fiyatı ve campaign/campaigns bilgisini sağlar.
 function extractTrendyolPlusPrice(value, seen = new Set()) {
   if (value == null) return null;
@@ -344,10 +347,10 @@ function extractTrendyolPlusPrice(value, seen = new Set()) {
     const v = value[key];
     if (v != null) {
       if (typeof v === "object") {
-        const n = firstNumber(v?.value, v?.amount, v?.price, v?.current_value, v?.current);
+        const n = trendyolNum(v?.current_value ?? v?.price_value ?? v?.value ?? v?.amount ?? v?.price ?? v?.current);
         if (n != null && n > 0) return n;
       } else {
-        const n = num(v);
+        const n = trendyolNum(v);
         if (n != null && n > 0) return n;
       }
     }
@@ -356,7 +359,7 @@ function extractTrendyolPlusPrice(value, seen = new Set()) {
   // ReefAPI may expose the TY+ amount inside the price object.
   if (value.price && typeof value.price === "object") {
     for (const key of exactKeys) {
-      const n = num(value.price[key]?.value ?? value.price[key]?.amount ?? value.price[key]);
+      const n = trendyolNum(value.price[key]?.current_value ?? value.price[key]?.price_value ?? value.price[key]?.value ?? value.price[key]?.amount ?? value.price[key]);
       if (n != null && n > 0) return n;
     }
   }
@@ -374,7 +377,7 @@ function extractTrendyolPlusPrice(value, seen = new Set()) {
   if (/trendyol\s*plus/i.test(text) && /sepet/i.test(text)) {
     const afterBasket = text.match(/sepet[^0-9]*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)\s*(?:TL|₺)/i);
     if (afterBasket) {
-      const n = num(afterBasket[1]);
+      const n = trendyolNum(afterBasket[1]);
       if (n != null && n > 0) return n;
     }
   }
@@ -406,7 +409,7 @@ async function getTrendyolDetail(x) {
 
   const identity = String(url || contentId);
   const key = crypto.createHash("sha256")
-    .update(`trendyol-price-v2|${identity}`)
+    .update(`trendyol-price-v3|${identity}`)
     .digest("hex");
 
   const cached = await getCache(key);
