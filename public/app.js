@@ -337,12 +337,22 @@ function renderAuthForm(mode) {
 function openAlarm(p) {
   if (!state.user) { openAuth("login"); toast("Fiyat alarmı için önce giriş yapmalısın."); return; }
   state.selected = p;
-  $("#modalBody").innerHTML = `<div class="auth-box alarm-box"><h2>🔔 Fiyat Alarmı</h2><p><b>${esc(p.title)}</b><br>${esc(storeName(p.store))} · mevcut: <b>${money(p.price)}</b></p><div class="alarm-form"><label for="targetPrice">Hedef fiyat</label><input id="targetPrice" type="number" inputmode="decimal" min="1" step="0.01" placeholder="Örn. 1.500" autocomplete="off"><button id="saveAlarm" class="primary">Alarmı Kur</button></div><div id="alarmMsg" class="msg"></div></div>`;
+  $("#modalBody").innerHTML = `<div class="auth-box alarm-box"><h2>🔔 Fiyat Alarmı</h2><p><b>${esc(p.title)}</b><br>${esc(storeName(p.store))} · mevcut: <b>${money(p.price)}</b></p><div class="alarm-form"><label for="targetPrice">Hedef fiyat (TL)</label><input id="targetPrice" type="text" inputmode="decimal" autocomplete="off" placeholder="Örn. 1.500 TL" aria-label="Hedef fiyat"><button id="saveAlarm" class="primary">Alarmı Kur</button></div><div id="alarmMsg" class="msg"></div></div>`;
   const targetInput = $("#targetPrice");
   requestAnimationFrame(() => { targetInput.focus(); targetInput.select(); });
   $("#saveAlarm").onclick = async () => {
-    const raw = String(targetInput.value || "").replace(/\s/g, "").replace(",", ".");
-    const target = Number(raw);
+    const rawText = String(targetInput.value || "").trim();
+    const raw = rawText.replace(/[^0-9,.-]/g, "");
+    let target;
+    if (raw.includes(",") && raw.includes(".")) {
+      target = Number(raw.replace(/\./g, "").replace(",", "."));
+    } else if (raw.includes(",")) {
+      target = Number(raw.replace(",", "."));
+    } else if (/^\d{1,3}(\.\d{3})+$/.test(raw)) {
+      target = Number(raw.replace(/\./g, ""));
+    } else {
+      target = Number(raw);
+    }
     if (!Number.isFinite(target) || target <= 0) return $("#alarmMsg").textContent = "Geçerli bir hedef fiyat gir.";
     try {
       await api("/api/alarms", { method: "POST", body: JSON.stringify({ store: storeKey(p.store), title: p.title, url: p.url, productId: p.id, targetPrice: target }) });

@@ -15,6 +15,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const DATABASE_URL = process.env.DATABASE_URL;
 const REEF_API_KEY = process.env.REEF_API_KEY;
+const BRIGHTDATA_API_KEY = process.env.BRIGHTDATA_API_KEY || "";
 const APP_URL = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 const CACHE_TTL = Math.max(60, Number(process.env.CACHE_TTL_SECONDS || 600));
 const ALARM_INTERVAL = Math.max(5, Number(process.env.ALARM_INTERVAL_MINUTES || 30));
@@ -630,6 +631,91 @@ function requireAuth(req, res, next) {
   next();
 }
 
+async function brightDataAmazonTest(amazonUrl) {
+  if (!BRIGHTDATA_API_KEY) throw new Error("BRIGHTDATA_API_KEY Render'da tanımlı değil.");
+
+  const u = new URL(amazonUrl);
+  const host = u.hostname.toLowerCase();
+  if (!(host === "amazon.com.tr" || host.endsWith(".amazon.com.tr"))) {
+    throw new Error("Bu test yalnızca amazon.com.tr ürün bağlantıları için açık.");
+  }
+
+  const trigger = await fetch(
+    "https://api.brightdata.com/datasets/v3/trigger?dataset_id=gd_l7q7dkf244hwjntr0&format=json&uncompressed_webhook=true&include_errors=true",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${BRIGHTDATA_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify([{ url: amazonUrl, origin_url: amazonUrl, language: "tr" }])
+    }
+  );
+
+  const triggerJson = await trigger.json().catch(() => ({}));
+  if (!trigger.ok || !triggerJson.snapshot_id) {
+    const msg = triggerJson?.error || triggerJson?.message || `Bright Data HTTP ${trigger.status}`;
+    throw new Error(String(msg));
+  }
+
+  const snapshotId = String(triggerJson.snapshot_id);
+  const deadline = Date.now() + 45000;
+  let lastStatus = "running";
+
+  while (Date.now() < deadline) {
+    const progress = await fetch(`https://api.brightdata.com/datasets/v3/progress/${encodeURIComponent(snapshotId)}`, {
+      headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` }
+    });
+    const progressJson = await progress.json().catch(() => ({}));
+    lastStatus = String(progressJson.status || "running");
+
+    if (progress.ok && lastStatus === "ready") break;
+    if (progress.ok && ["failed", "error", "cancelled"].includes(lastStatus)) {
+      throw new Error(`Bright Data işi ${lastStatus} durumunda.`);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  if (lastStatus !== "ready") {
+    return { ready: false, snapshotId, status: lastStatus };
+  }
+
+  const snapshot = await fetch(`https://api.brightdata.com/datasets/v3/snapshot/${encodeURIComponent(snapshotId)}?format=json`, {
+    headers: { "Authorization": `Bearer ${BRIGHTDATA_API_KEY}` }
+  });
+  const data = await snapshot.json().catch(() => null);
+  if (!snapshot.ok) {
+    throw new Error(`Bright Data sonuç HTTP ${snapshot.status}`);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    ready: true,
+    snapshotId,
+    sample: row ? {
+      title: row.title || row.product_name || row.name || null,
+      price: row.final_price ?? row.price ?? row.initial_price ?? null,
+      currency: row.currency || null,
+      availability: row.availability ?? null,
+      url: row.url || null,
+      asin: row.asin || null
+    } : null
+  };
+}
+
+app.get("/api/brightdata/test-amazon", requireAuth, async (req, res) => {
+  try {
+    const url = String(req.query.url || "").trim();
+    if (!url) return res.status(400).json({ ok: false, error: "Amazon TR ürün URL'si gerekli." });
+    const result = await brightDataAmazonTest(url);
+    res.json({ ok: true, provider: "brightdata", ...result });
+  } catch (e) {
+    console.error("Bright Data test hatası", e.message);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/api/health", async (req, res) => {
   res.json({ ok: true, database: Boolean(DATABASE_URL), reef: Boolean(REEF_API_KEY) });
 });
@@ -773,7 +859,21 @@ app.get("/api/alarms", requireAuth, async (req, res) => {
 });
 
 app.post("/api/alarms", requireAuth, async (req, res) => {
-  const store = String(req.body.store || "").trim();
+  const storeAliases = {
+    "Trendyol": "trendyol",
+    "Hepsiburada": "hepsiburada",
+    "n11": "n11",
+    "MediaMarkt": "mediamarkt",
+    "Teknosa": "teknosa",
+    "Vatan": "vatan",
+    "Vatan Bilgisayar": "vatan",
+    "Amazon": "amazon",
+    "Amazon Türkiye": "amazon",
+    "Pazarama": "pazarama",
+    "Çiçeksepeti": "ciceksepeti"
+  };
+  const rawStore = String(req.body.store || "").trim();
+  const store = storeAliases[rawStore] || rawStore.toLowerCase();
   const title = String(req.body.title || "").trim();
   const url = String(req.body.url || "").trim();
   const productId = String(req.body.productId || "").trim();
